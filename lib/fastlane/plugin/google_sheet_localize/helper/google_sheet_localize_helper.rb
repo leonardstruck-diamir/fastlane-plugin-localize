@@ -1,14 +1,16 @@
+# frozen_string_literal: true
+
 require 'fastlane_core/ui/ui'
 require 'googleauth'
 require 'google/apis/sheets_v4'
 
 module Fastlane
-  UI = FastlaneCore::UI unless Fastlane.const_defined?("UI")
+  UI = FastlaneCore::UI unless Fastlane.const_defined?('UI')
 
   module Helper
     # Thin wrapper around the Google Sheets API v4.
     class GoogleSheetLocalizeHelper
-      SCOPE = 'https://www.googleapis.com/auth/spreadsheets.readonly'.freeze
+      SCOPE = 'https://www.googleapis.com/auth/spreadsheets.readonly'
 
       # Rows of a single tab. Every row is padded to the same width (like the
       # old google_drive gem did), because the Sheets API drops trailing empty cells.
@@ -35,7 +37,7 @@ module Fastlane
         range = "'#{title.gsub("'", "''")}'"
         values = @service.get_spreadsheet_values(@spreadsheet_id, range).values || []
         width = values.map(&:count).max.to_i
-        rows = values.map { |row| row.map(&:to_s) + Array.new(width - row.count, "") }
+        rows = values.map { |row| row.map(&:to_s) + Array.new(width - row.count, '') }
         Worksheet.new(title, rows)
       end
     end
