@@ -1,5 +1,4 @@
 require 'fastlane/action'
-require 'google_drive'
 require 'json'
 
 require_relative '../helper/google_sheet_localize_helper'
@@ -9,8 +8,7 @@ module Fastlane
     class GoogleSheetLocalizeAction < Action
       def self.run(params)
 
-        session = ::GoogleDrive::Session.from_service_account_key(params[:service_account_path])
-        spreadsheet_id = "https://docs.google.com/spreadsheets/d/#{params[:sheet_id]}"
+        sheets = Helper::GoogleSheetLocalizeHelper.new(params[:service_account_path], params[:sheet_id])
         tabs = params[:tabs]
         platform = params[:platform]
         path = params[:localization_path]
@@ -39,15 +37,9 @@ module Fastlane
           comment_example_language = default_language
         end
 
-        spreadsheet = session.spreadsheet_by_url(spreadsheet_id)
-
-        filterdWorksheets = []
-
-        if tabs.count == 0
-          filterdWorksheets = spreadsheet.worksheets
-        else
-          filterdWorksheets = spreadsheet.worksheets.select { |item| tabs.include?(item.title) }
-        end
+        titles = sheets.worksheet_titles
+        titles = titles.select { |title| tabs.include?(title) } unless tabs.count == 0
+        filterdWorksheets = titles.map { |title| sheets.worksheet(title) }
 
         result = []
         
@@ -55,15 +47,18 @@ module Fastlane
 
           identifierIndex = 0
 
+          rows = worksheet.rows
+          next if rows.empty?
+
           for i in 0..worksheet.max_cols
-            if worksheet.rows[0][i] == identifier_name
+            if rows[0][i] == identifier_name
               identifierIndex = i
             end
           end
 
           for i in 0..worksheet.max_cols
 
-            title = worksheet.rows[0][i]
+            title = rows[0][i]
 
             if language_titles.include?(title)
 
@@ -76,7 +71,7 @@ module Fastlane
                 }
               end
 
-              contentRows = worksheet.rows.drop(1)
+              contentRows = rows.drop(1)
 
               items = language['items']
               items = items + self.generateJSONObject(contentRows, i, identifierIndex)
