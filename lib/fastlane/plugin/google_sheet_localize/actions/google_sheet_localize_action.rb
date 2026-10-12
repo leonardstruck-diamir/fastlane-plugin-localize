@@ -402,6 +402,7 @@ module Fastlane
                 text = defaultLanguageText
               end
 
+              raw_text = text
               text = text.gsub(/\\?'/, "\\\\'")
 
               if text.include?("one|")
@@ -425,7 +426,8 @@ module Fastlane
 
                 line = line + "    <string-array name=\"#{identifier}\">\n"
 
-                JSON.parse(text).each { |arrayItem|
+                # JSON does not allow \' escapes, so parse the text before the apostrophes got escaped
+                JSON.parse(raw_text.gsub("\\'", "'")).each { |arrayItem|
 
                   arrayItem = arrayItem.gsub("'", "\\\\'")
 
