@@ -19,6 +19,7 @@ module Fastlane
         comment_example_language = params[:comment_example_language]
         support_objc = params[:support_objc]
         support_spm = params[:support_spm]
+        swift_options = { access_level: params[:access_level] }
 
         if identifier_name.to_s.empty?
           identifier_name = 'Identifier iOS' if platform == 'ios'
@@ -67,7 +68,7 @@ module Fastlane
           end
         end
         create_files(result, platform, path, default_language, base_language, code_generation_path,
-                     comment_example_language, support_objc, support_spm)
+                     comment_example_language, support_objc, support_spm, swift_options)
       end
 
       def self.generate_json_object(content_rows, index, identifier_index)
@@ -106,7 +107,7 @@ module Fastlane
       end
 
       def self.create_files(languages, platform, destination_path, default_language, base_language, code_generation_path,
-                            comment_example_language, support_objc, support_spm)
+                            comment_example_language, support_objc, support_spm, swift_options = {})
         create_files_for_languages(languages, platform, destination_path, default_language, base_language)
 
         if platform == 'web'
@@ -157,7 +158,8 @@ module Fastlane
         swift_filepath = "#{swift_path}/#{swift_filename}"
 
         File.open(swift_filepath, 'w') do |f|
-          f.write("import Foundation\n\n// swiftlint:disable all\n#{get_ios_type_definition(support_objc)} {\n")
+          access_level = swift_options[:access_level] || 'public'
+          f.write("import Foundation\n\n// swiftlint:disable all\n#{get_ios_type_definition(support_objc, access_level)} {\n")
           filtered_items.each do |item|
             identifier = item['identifier']
 
@@ -184,9 +186,9 @@ module Fastlane
 
             f.write(create_comment(item['comment'], item['text']))
             if arguments.count.zero?
-              f.write("#{get_ios_attributes(support_objc)}public static let #{constant_name} = localized(identifier: \"#{identifier}\")\n")
+              f.write("#{get_ios_attributes(support_objc)}#{access_level} static let #{constant_name} = localized(identifier: \"#{identifier}\")\n")
             else
-              f.write(create_ios_function(constant_name, identifier, arguments, support_objc))
+              f.write(create_ios_function(constant_name, identifier, arguments, support_objc, access_level))
             end
           end
           f.write("\n}")
@@ -427,8 +429,8 @@ module Fastlane
         \n})
       end
 
-      def self.create_ios_function(constant_name, identifier, arguments, support_objc)
-        function_title = "#{get_ios_attributes(support_objc)}public static func #{constant_name}("
+      def self.create_ios_function(constant_name, identifier, arguments, support_objc, access_level = 'public')
+        function_title = "#{get_ios_attributes(support_objc)}#{access_level} static func #{constant_name}("
 
         arguments.each_with_index do |item, index|
           function_title += "_ arg#{index}: #{item[:type]}"
@@ -451,8 +453,8 @@ module Fastlane
         function_title
       end
 
-      def self.get_ios_type_definition(support_objc)
-        support_objc ? 'public class Localization: NSObject' : 'public struct Localization'
+      def self.get_ios_type_definition(support_objc, access_level = 'public')
+        support_objc ? "#{access_level} class Localization: NSObject" : "#{access_level} struct Localization"
       end
 
       def self.get_ios_attributes(support_objc)
@@ -583,6 +585,17 @@ module Fastlane
                                        description: 'Code generation path for the Swift file',
                                        optional: true,
                                        type: String),
+          FastlaneCore::ConfigItem.new(key: :access_level,
+                                       env_name: 'ACCESS_LEVEL',
+                                       description: 'Access level of the generated Localization type and its members: ' \
+                                                    'public, package or internal. Only relevant for the ios platform',
+                                       type: String,
+                                       default_value: 'public',
+                                       verify_block: proc do |value|
+                                         unless %w[public package internal].include?(value)
+                                           UI.user_error!("access_level must be public, package or internal, not #{value}")
+                                         end
+                                       end),
           FastlaneCore::ConfigItem.new(key: :support_objc,
                                        env_name: 'OBJC_SUPPORT',
                                        description: 'Whether the generated code should support Obj-C. Only relevant for the ios platform',

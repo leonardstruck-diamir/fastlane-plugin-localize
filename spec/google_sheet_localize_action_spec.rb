@@ -32,12 +32,12 @@ describe Fastlane::Actions::GoogleSheetLocalizeAction do
                        worksheet: Fastlane::Helper::GoogleSheetLocalizeHelper::Worksheet.new('Sheet', rows))
     end
 
-    def run_action(platform, dir)
+    def run_action(platform, dir, **options)
       allow(Fastlane::Helper::GoogleSheetLocalizeHelper).to receive(:new).and_return(helper)
       config = FastlaneCore::Configuration.create(
         Fastlane::Actions::GoogleSheetLocalizeAction.available_options,
         service_account_path: 'key.json', sheet_id: 'id', platform: platform, localization_path: dir,
-        language_titles: %w[de en], default_language: 'de'
+        language_titles: %w[de en], default_language: 'de', **options
       )
       Fastlane::Actions::GoogleSheetLocalizeAction.run(config)
     end
@@ -49,6 +49,23 @@ describe Fastlane::Actions::GoogleSheetLocalizeAction do
         expect(strings).to eq("\"hello.world\" = \"Hello %@\"; //greeting\n\"bye\" = \"Tschüss\";\n")
         expect(File.read("#{dir}/Localization.swift",
                          encoding: 'UTF-8')).to include('public static func helloWorld(_ arg0: String)')
+      end
+    end
+
+    it 'generates Swift with the given access level' do
+      Dir.mktmpdir do |dir|
+        run_action('ios', dir, access_level: 'package')
+        swift = File.read("#{dir}/Localization.swift", encoding: 'UTF-8')
+        expect(swift).to include('package struct Localization')
+        expect(swift).to include('package static func helloWorld(_ arg0: String)')
+        expect(swift).to include('package static let bye = localized(identifier: "bye")')
+        expect(swift).not_to include('public ')
+      end
+    end
+
+    it 'rejects an unknown access level' do
+      Dir.mktmpdir do |dir|
+        expect { run_action('ios', dir, access_level: 'open') }.to raise_error(FastlaneCore::Interface::FastlaneError)
       end
     end
 

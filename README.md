@@ -47,6 +47,10 @@ other|%d artists
 In order to support Objective-C, the plugin provides the `support_objc` argument, which is default `false`.  
 Therefore, if you need Objective-C support pass `support_objc: true`.
 
+### Generated Swift
+
+The `Localization.swift` the plugin generates is `public` by default. A Swift package that uses it only internally can pass `access_level: "package"` (or `"internal"`), so the type does not become part of its API or clash with an app's own `Localization`.
+
 ## Example
 
 ```ruby
