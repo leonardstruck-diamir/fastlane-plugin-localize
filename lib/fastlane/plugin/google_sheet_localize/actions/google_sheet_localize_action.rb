@@ -19,7 +19,8 @@ module Fastlane
         comment_example_language = params[:comment_example_language]
         support_objc = params[:support_objc]
         support_spm = params[:support_spm]
-        swift_options = { access_level: params[:access_level] }
+        swift_options = { access_level: params[:access_level], swift_type: params[:swift_type], type_name: params[:type_name],
+                          file_header: params[:file_header] }
 
         if identifier_name.to_s.empty?
           identifier_name = 'Identifier iOS' if platform == 'ios'
@@ -155,10 +156,16 @@ module Fastlane
 
         filtered_items = filter_unused_rows(language_items['items'], 'identifier', 'true')
 
+        if swift_options[:swift_type] == 'configurable_struct'
+          create_configurable_struct(filtered_items, swift_path, swift_options.merge(support_spm: support_spm))
+          return
+        end
+
         swift_filepath = "#{swift_path}/#{swift_filename}"
 
         File.open(swift_filepath, 'w') do |f|
           access_level = swift_options[:access_level] || 'public'
+          f.write("#{swift_options[:file_header].to_s.chomp}\n\n") unless swift_options[:file_header].to_s.empty?
           f.write("import Foundation\n\n// swiftlint:disable all\n#{get_ios_type_definition(support_objc, access_level)} {\n")
           filtered_items.each do |item|
             identifier = item['identifier']
@@ -194,6 +201,123 @@ module Fastlane
           f.write("\n}")
           f.write(create_ios_file_end_string(destination_path, support_spm))
         end
+      end
+
+      SWIFT_KEYWORDS = %w[continue switch default case class struct func var let return import in is as if else for
+                          while repeat do break throw try catch where protocol extension enum self Self super init
+                          deinit subscript operator public private internal static true false nil].freeze
+
+      # Writes a struct with one `LocalizedStringResource` per text, so an app can replace any text with its own,
+      # for example with a string literal from its own String Catalog. Texts with arguments are closures that return
+      # the resource. Texts are grouped into nested structs by the first segment of their identifier, so
+      # `app.review.page` becomes `review.page`.
+      def self.create_configurable_struct(items, swift_path, options)
+        type_name = options[:type_name].to_s.empty? ? 'Localization' : options[:type_name]
+        access = options[:access_level] || 'public'
+        bundle = options[:support_spm] ? '.atURL(Bundle.module.bundleURL)' : '.main'
+        texts = items.map { |item| swift_text(item) }
+        groups = texts.select { |text| text[:group] }.group_by { |text| text[:group] }
+        ungrouped = texts.reject { |text| text[:group] }
+
+        members = groups.map do |group, _|
+          "/// The texts whose identifiers start with `#{group}.`.\n" \
+            "#{access} var #{swift_identifier(lower_camel([group]))} = #{upper_camel(group)}()"
+        end
+        members += ungrouped.map { |text| swift_property(text, access, type_name) }
+        nested = groups.map { |group, group_texts| swift_group(upper_camel(group), group_texts, access, type_name) }
+
+        header = options[:file_header].to_s.empty? ? '// swiftlint:disable all' : options[:file_header].chomp
+        File.write("#{swift_path}/#{type_name}.swift", <<~SWIFT)
+          #{header}
+
+          import Foundation
+
+          /// The texts from the localization sheet, each of which an app can replace with its own.
+          #{access} struct #{type_name}: Sendable {
+          #{indent(members.join("\n\n"), 1)}
+
+              /// The texts from the localization files.
+              #{access} init() {}
+
+              fileprivate static let bundle = LocalizedStringResource.BundleDescription#{bundle}
+          }
+          #{nested.map { |group| "\n#{group}" }.join}
+        SWIFT
+      end
+
+      # One nested struct of texts that share the first segment of their identifier.
+      def self.swift_group(name, texts, access, type_name)
+        <<~SWIFT.chomp
+          extension #{type_name} {
+              /// The texts of the #{name} group.
+              #{access} struct #{name}: Sendable {
+          #{indent(texts.map { |text| swift_property(text, access, type_name) }.join("\n\n"), 2)}
+
+                  /// The texts from the localization files.
+                  #{access} init() {}
+              }
+          }
+        SWIFT
+      end
+
+      # The parts of a text the configurable struct needs: its group, Swift name and argument types.
+      def self.swift_text(item)
+        parts = item['identifier'].split(/\.|_/).reject(&:empty?)
+        group = parts.count > 1 ? parts.first : nil
+        name = swift_identifier(lower_camel(group ? parts.drop(1) : parts))
+        types = find_arguments_in_text(map_invalid_placeholder(item['text'])).map { |argument| argument[:type] }
+        { identifier: item['identifier'], group: group, name: name, types: types, item: item }
+      end
+
+      def self.swift_property(text, access, type_name)
+        comment = struct_comment(text[:item]['comment'], text[:item]['text'])
+        names = text[:types].each_index.map { |index| "arg#{index}" }
+        resource = "LocalizedStringResource(\n    \"#{text[:identifier]}\",\n    " \
+                   "defaultValue: \"#{swift_default_value(text[:item]['text'])}\",\n    " \
+                   "bundle: #{type_name}.bundle\n)"
+        return "#{comment}#{access} var #{text[:name]} = #{resource}" if names.empty?
+
+        parameters = text[:types].each_with_index.map { |type, index| "_ arg#{index}: #{type}" }.join(', ')
+        "#{comment}#{access} var #{text[:name]}: @Sendable (#{parameters}) -> LocalizedStringResource = " \
+          "{ #{names.join(', ')} in\n#{indent(resource, 1)}\n}"
+      end
+
+      # The text in the default language as the body of a Swift string literal, with its placeholders interpolated
+      # in order. Plural texts use their `other` form.
+      def self.swift_default_value(text)
+        text = text[/^other\|(.*)$/, 1] || text if text.include?('one|')
+        index = -1
+        text.split(/(%(?:[0-9]+\$)?(?:lld|ld|d|s|@|[0-9]*\.?[0-9]*f))/).each_with_index.map do |part, position|
+          if position.odd?
+            index += 1
+            "\\(arg#{index})"
+          else
+            part.gsub('\\', '\\\\').gsub('"', '\\"').gsub("\n", '\\n')
+          end
+        end.join
+      end
+
+      def self.lower_camel(parts)
+        parts.each_with_index.map { |part, index| (index.zero? ? part[0].downcase : part[0].upcase) + part[1..] }.join
+      end
+
+      def self.upper_camel(part)
+        part[0].upcase + part[1..]
+      end
+
+      def self.swift_identifier(name)
+        SWIFT_KEYWORDS.include?(name) ? "`#{name}`" : name
+      end
+
+      def self.indent(text, levels)
+        text.gsub(/^(?=.)/, '    ' * levels)
+      end
+
+      # A documentation comment with the example text and the comment from the sheet.
+      def self.struct_comment(comment, example)
+        lines = example.to_s.split("\n")
+        lines += ['', 'Sheet comment:'] + comment.to_s.split("\n") unless comment.to_s.empty?
+        "#{lines.map { |line| "/// #{line}".rstrip }.join("\n")}\n"
       end
 
       def self.create_comment(comment, example)
@@ -596,6 +720,30 @@ module Fastlane
                                            UI.user_error!("access_level must be public, package or internal, not #{value}")
                                          end
                                        end),
+          FastlaneCore::ConfigItem.new(key: :swift_type,
+                                       env_name: 'SWIFT_TYPE',
+                                       description: 'Shape of the generated Swift: static (one static member per text) ' \
+                                                    'or configurable_struct (a struct with one closure per text and a ' \
+                                                    '`default` instance, so an app can replace any text). Only relevant ' \
+                                                    'for the ios platform',
+                                       type: String,
+                                       default_value: 'static',
+                                       verify_block: proc do |value|
+                                         unless %w[static configurable_struct].include?(value)
+                                           UI.user_error!("swift_type must be static or configurable_struct, not #{value}")
+                                         end
+                                       end),
+          FastlaneCore::ConfigItem.new(key: :type_name,
+                                       env_name: 'TYPE_NAME',
+                                       description: 'Name of the generated configurable struct and its file',
+                                       optional: true,
+                                       type: String),
+          FastlaneCore::ConfigItem.new(key: :file_header,
+                                       env_name: 'FILE_HEADER',
+                                       description: 'Comment written at the top of the generated Swift file, for ' \
+                                                    'example to exclude it from a formatter',
+                                       optional: true,
+                                       type: String),
           FastlaneCore::ConfigItem.new(key: :support_objc,
                                        env_name: 'OBJC_SUPPORT',
                                        description: 'Whether the generated code should support Obj-C. Only relevant for the ios platform',

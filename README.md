@@ -51,6 +51,26 @@ Therefore, if you need Objective-C support pass `support_objc: true`.
 
 The `Localization.swift` the plugin generates is `public` by default. A Swift package that uses it only internally can pass `access_level: "package"` (or `"internal"`), so the type does not become part of its API or clash with an app's own `Localization`.
 
+`swift_type: "configurable_struct"` generates a struct instead, with one `LocalizedStringResource` per text, looked up in the generated files. Texts with arguments are closures that return the resource. An app, or the users of a framework, can replace any text with its own, for example with a string literal that Xcode extracts into the app's String Catalog:
+
+```ruby
+google_sheet_localize(..., swift_type: "configurable_struct", type_name: "AppTexts")
+```
+
+```swift
+var texts = AppTexts()
+texts.common.cancel = "Abort"
+texts.review.page = { page, count in "Sheet \(page) of \(count)" }
+
+Button(texts.common.cancel) { ... }
+```
+
+The default value of each resource is the text in `comment_example_language`, with its placeholders interpolated in order; plural texts use their `other` form.
+
+Texts are grouped into nested structs by the first segment of their identifier, so `review.page.title` becomes `review.pageTitle`. `type_name` names the struct and its file (`Localization` by default).
+
+`file_header` is written at the top of the generated Swift file, for example `"// swift-format-ignore-file"` to keep a formatter away from it.
+
 ## Example
 
 ```ruby

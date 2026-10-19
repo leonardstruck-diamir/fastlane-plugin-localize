@@ -63,6 +63,42 @@ describe Fastlane::Actions::GoogleSheetLocalizeAction do
       end
     end
 
+    it 'generates a configurable struct with one localized string resource per text' do
+      Dir.mktmpdir do |dir|
+        run_action('ios', dir, swift_type: 'configurable_struct', type_name: 'AppTexts', support_spm: true,
+                               file_header: '// Generated; do not edit.')
+        swift = File.read("#{dir}/AppTexts.swift", encoding: 'UTF-8')
+        expect(File.exist?("#{dir}/Localization.swift")).to be(false)
+        expect(swift).to start_with("// Generated; do not edit.\n\nimport Foundation")
+        expect(swift).not_to include('swiftlint')
+        expect(swift).to include('public struct AppTexts: Sendable')
+        expect(swift).to include("public var bye = LocalizedStringResource(\n        \"bye\",\n        " \
+                                 "defaultValue: \"Tschüss\",\n        bundle: AppTexts.bundle\n    )")
+        expect(swift).to include('LocalizedStringResource.BundleDescription.atURL(Bundle.module.bundleURL)')
+      end
+    end
+
+    it 'groups texts by the first segment of their identifier' do
+      Dir.mktmpdir do |dir|
+        run_action('ios', dir, swift_type: 'configurable_struct', type_name: 'AppTexts')
+        swift = File.read("#{dir}/AppTexts.swift", encoding: 'UTF-8')
+        expect(swift).to include('public var hello = Hello()')
+        expect(swift).to include('public struct Hello: Sendable')
+        expect(swift).to include("        /// Hallo %s\n        ///\n        /// Sheet comment:\n        /// greeting\n")
+        expect(swift).to include('public var world: @Sendable (_ arg0: String) -> LocalizedStringResource = { arg0 in')
+        expect(swift).to include('defaultValue: "Hallo \\(arg0)"')
+        expect(swift).to include('LocalizedStringResource.BundleDescription.main')
+      end
+    end
+
+    it 'interpolates placeholders and uses the other form of plurals as default values' do
+      action = Fastlane::Actions::GoogleSheetLocalizeAction
+      expect(action.swift_default_value('Seite %1$s von %2$s')).to eq('Seite \\(arg0) von \\(arg1)')
+      expect(action.swift_default_value("one|%d weitere Leistung\nother|%d weitere Leistungen"))
+        .to eq('\\(arg0) weitere Leistungen')
+      expect(action.swift_default_value("Sag \"hi\"\nzu")).to eq('Sag \\"hi\\"\\nzu')
+    end
+
     it 'rejects an unknown access level' do
       Dir.mktmpdir do |dir|
         expect { run_action('ios', dir, access_level: 'open') }.to raise_error(FastlaneCore::Interface::FastlaneError)
